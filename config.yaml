@@ -1,0 +1,14 @@
+etcd:
+  root-cert-path: /opt/etcd/ssl/ca.pem
+  client-cert-path: /opt/etcd/ssl/server.pem
+  client-key-cert-path: /opt/etcd/ssl/server-key.pem
+  endpoints: [https://172.16.166.87:2379]
+
+server:
+  host: http://172.16.200.112:9067
+  apis:
+    run: /v1/server/run
+    stop: /v1/server/stop
+    healthy: /v1/server/healthy
+    list: /v1/server/list
+  ipRange: 172.244.0.0/24
