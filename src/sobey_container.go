@@ -20,6 +20,7 @@ type SobeyContainer struct {
 	ID               string                       `json:"id"`
 	Name             string                       `json:"name"`
 	ServerName       string                       `json:"serverName"`
+	Repo             string                       `json:"repo"`
 	Image            string                       `json:"image"`
 	Pid              string                       `json:"pid"`
 	Path             string                       `json:"path"`
@@ -176,6 +177,10 @@ func (ss *sobeyService) CreateContainer(ctx context.Context, req *runtimeapi.Cre
 
 	apiVersion := common.SobeyRuntimeApiVersion
 	image := config.Image.Image
+	if strings.HasSuffix(image, ":latest") {
+		imageArr := strings.Split(image, ":")
+		image = strings.Join(imageArr[:len(imageArr)-1], ":")
+	}
 	containerName := util.MakeContainerName(sandboxConfig, config)
 
 	containerID := util.RandomString()
@@ -189,6 +194,7 @@ func (ss *sobeyService) CreateContainer(ctx context.Context, req *runtimeapi.Cre
 		ID:               containerID,
 		Name:             containerName,
 		ServerName:       config.Metadata.Name,
+		Repo:             ss.repo,
 		Image:            image,
 		PortMapping:      sandboxConfig.PortMappings,
 		PodSandboxConfig: sandboxConfig,
@@ -266,7 +272,7 @@ func startServer(info SobeyContainer, url string) (*ContainerStartResponse, erro
 	containerPort := "22"
 	req := ContainerStartRequest{
 		Name:   info.ServerName,
-		Image:  info.Image,
+		Image:  fmt.Sprintf("%s%s", info.Repo, info.Image),
 		Port:   containerPort,
 		LogDir: info.Path,
 	}

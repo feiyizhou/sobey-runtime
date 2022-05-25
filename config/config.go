@@ -22,6 +22,7 @@ type Server struct {
 	Host    string    `json:"host" mapstructure:"host"`
 	Apis    ServerApi `json:"apis" mapstructure:"apis"`
 	IpRange string    `json:"ipRange" mapstructure:"ipRange"`
+	Repo    string    `json:"repo" mapstructure:"repo"`
 }
 
 type ServerApi struct {

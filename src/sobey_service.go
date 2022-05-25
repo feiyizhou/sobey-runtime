@@ -39,6 +39,9 @@ type sobeyService struct {
 	// ipRange
 	ipRange string
 
+	// repo
+	repo string
+
 	// server
 	runServerApiUrl  string
 	stopServerApiUrl string
@@ -55,6 +58,8 @@ func NewSobeyService(serverConf *config.Server) (SobeyService, error) {
 		dbService: etcd.NewDBService(),
 
 		ipRange: serverConf.IpRange,
+
+		repo: serverConf.Repo,
 
 		runServerApiUrl:  fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.Run),
 		stopServerApiUrl: fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.Run),

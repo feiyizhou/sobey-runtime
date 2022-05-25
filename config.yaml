@@ -12,3 +12,4 @@ server:
     healthy: /v1/server/healthy
     list: /v1/server/list
   ipRange: 172.244.0.0/24
+  repo: http://172.16.200.116:8081/repository/appManager/
