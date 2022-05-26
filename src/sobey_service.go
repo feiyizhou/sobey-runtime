@@ -7,6 +7,7 @@ import (
 	"sobey-runtime/config"
 	"sobey-runtime/etcd"
 	util "sobey-runtime/utils"
+	"strings"
 	"sync"
 )
 
@@ -43,6 +44,7 @@ type sobeyService struct {
 	repo string
 
 	// server
+	host             string
 	runServerApiUrl  string
 	stopServerApiUrl string
 	healthyApiUrl    string
@@ -61,8 +63,9 @@ func NewSobeyService(serverConf *config.Server) (SobeyService, error) {
 
 		repo: serverConf.Repo,
 
+		host:             strings.Split(serverConf.Host, ":")[0],
 		runServerApiUrl:  fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.Run),
-		stopServerApiUrl: fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.Run),
+		stopServerApiUrl: fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.Stop),
 		healthyApiUrl:    fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.Healthy),
 		listServerApiUrl: fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.List),
 	}

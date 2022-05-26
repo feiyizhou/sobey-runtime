@@ -19,7 +19,10 @@ import (
 type SobeyContainer struct {
 	ID               string                       `json:"id"`
 	Name             string                       `json:"name"`
+	ContainerName    string                       `json:"containerName"`
 	ServerName       string                       `json:"serverName"`
+	ServerHost       string                       `json:"serverHost"`
+	ServerPort       int                          `json:"serverPort"`
 	Repo             string                       `json:"repo"`
 	Image            string                       `json:"image"`
 	Pid              string                       `json:"pid"`
@@ -38,13 +41,13 @@ type SobeyContainer struct {
 type ContainerStartRequest struct {
 	Name   string `json:"name"`
 	Image  string `json:"image"`
-	Port   string `json:"port"`
 	LogDir string `json:"log_dir"`
 }
 
 type ContainerStartResponse struct {
 	Name   string `json:"name"`
 	Pid    string `json:"pid"`
+	Port   int    `json:"port"`
 	UpTime int64  `json:"up_time"`
 }
 
@@ -193,7 +196,7 @@ func (ss *sobeyService) CreateContainer(ctx context.Context, req *runtimeapi.Cre
 	containerInfo := SobeyContainer{
 		ID:               containerID,
 		Name:             containerName,
-		ServerName:       config.Metadata.Name,
+		ContainerName:    config.Metadata.Name,
 		Repo:             ss.repo,
 		Image:            image,
 		PortMapping:      sandboxConfig.PortMappings,
@@ -240,6 +243,9 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 	if err != nil {
 		return nil, err
 	}
+	containerInfo.ServerName = startRes.Name
+	containerInfo.ServerHost = ss.host
+	containerInfo.ServerPort = startRes.Port
 	containerInfo.Pid = startRes.Pid
 	containerInfo.StartedAt = startRes.UpTime * 1000
 	containerInfo.FinishedAt = time.Now().UnixNano()
@@ -269,11 +275,9 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 
 func startServer(info SobeyContainer, url string) (*ContainerStartResponse, error) {
 
-	containerPort := "22"
 	req := ContainerStartRequest{
-		Name:   info.ServerName,
+		Name:   info.ContainerName,
 		Image:  fmt.Sprintf("%s%s", info.Repo, info.Image),
-		Port:   containerPort,
 		LogDir: info.Path,
 	}
 	reqBytes, err := json.Marshal(req)
