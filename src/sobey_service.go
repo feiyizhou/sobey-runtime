@@ -53,6 +53,7 @@ type sobeyService struct {
 
 func NewSobeyService(serverConf *config.Server) (SobeyService, error) {
 
+	hostTmpArr := strings.Split(serverConf.Host, ":")
 	ss := &sobeyService{
 		os:           util.RealOS{},
 		networkReady: make(map[string]bool),
@@ -63,7 +64,7 @@ func NewSobeyService(serverConf *config.Server) (SobeyService, error) {
 
 		repo: serverConf.Repo,
 
-		host:             strings.Split(serverConf.Host, ":")[0],
+		host:             strings.Join(hostTmpArr[:len(hostTmpArr)-1], ":"),
 		runServerApiUrl:  fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.Run),
 		stopServerApiUrl: fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.Stop),
 		healthyApiUrl:    fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.Healthy),

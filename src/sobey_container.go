@@ -19,7 +19,6 @@ import (
 type SobeyContainer struct {
 	ID               string                       `json:"id"`
 	Name             string                       `json:"name"`
-	ContainerName    string                       `json:"containerName"`
 	ServerName       string                       `json:"serverName"`
 	ServerHost       string                       `json:"serverHost"`
 	ServerPort       int                          `json:"serverPort"`
@@ -74,7 +73,7 @@ func (ss *sobeyService) ListContainers(ctx context.Context, req *runtimeapi.List
 		}
 		sobeyContainers = filterContainers(req.GetFilter(), sobeyContainers)
 		for _, containerInfo := range sobeyContainers {
-			metadata, err := util.ParseContainerName(containerInfo.ContainerName)
+			metadata, err := util.ParseContainerName(containerInfo.Name)
 			if err != nil {
 				return nil, err
 			}
@@ -85,7 +84,7 @@ func (ss *sobeyService) ListContainers(ctx context.Context, req *runtimeapi.List
 				Metadata:     metadata,
 				Image:        &runtimeapi.ImageSpec{Image: containerInfo.Image},
 				ImageRef:     util.ToPullableImageID(containerInfo.Image, true),
-				State:        runtimeapi.ContainerState_CONTAINER_RUNNING,
+				State:        containerInfo.State,
 				CreatedAt:    containerInfo.CreateAt,
 				Labels:       labels,
 				Annotations:  annotations,
@@ -195,8 +194,7 @@ func (ss *sobeyService) CreateContainer(ctx context.Context, req *runtimeapi.Cre
 	}
 	containerInfo := SobeyContainer{
 		ID:               containerID,
-		Name:             config.Metadata.Name,
-		ContainerName:    containerName,
+		Name:             containerName,
 		Repo:             ss.repo,
 		Image:            image,
 		PortMapping:      sandboxConfig.PortMappings,
@@ -272,8 +270,12 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 
 func startServer(info SobeyContainer, url string) (*ContainerStartResponse, error) {
 
+	metadata, err := util.ParseContainerName(info.Name)
+	if err != nil {
+		return nil, err
+	}
 	req := ContainerStartRequest{
-		Name:   info.Name,
+		Name:   metadata.Name,
 		Image:  fmt.Sprintf("%s%s", info.Repo, info.Image),
 		LogDir: info.Path,
 	}
@@ -388,7 +390,7 @@ func (ss *sobeyService) ContainerStatus(ctx context.Context, req *runtimeapi.Con
 	}
 	imageID := util.ToPullableImageID(containerInfo.Image, true)
 
-	metadata, err := util.ParseContainerName(containerInfo.ContainerName)
+	metadata, err := util.ParseContainerName(containerInfo.Name)
 	if err != nil {
 		return nil, err
 	}
