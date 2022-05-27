@@ -17,5 +17,6 @@ const (
 	KubernetesContainerNameLabel = "io.kubernetes.container.name"
 
 	ServerLogDirPath        = "/var/lib/sobey/servers/log/"
+	ServerImageDirPath      = "/var/lib/sobey/images/"
 	KubernetesPodLogDirPath = "/var/log/pods/"
 )

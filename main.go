@@ -33,6 +33,16 @@ func init() {
 		}
 	}
 
+	_, err = os.Stat(filepath.Dir(common.ServerImageDirPath))
+	if err != nil {
+		if os.IsNotExist(err) {
+			err := os.MkdirAll(filepath.Dir(common.ServerImageDirPath), 0750)
+			if err != nil {
+				fmt.Printf("Create kubernetes pod log dir err, err: %v", err)
+			}
+		}
+	}
+
 	_, err = os.Stat(filepath.Dir(common.KubernetesPodLogDirPath))
 	if err != nil {
 		if os.IsNotExist(err) {

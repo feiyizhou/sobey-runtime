@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -56,4 +57,20 @@ func do(method, url string, payload io.Reader) (string, error) {
 		return "", err
 	}
 	return string(data), err
+}
+
+func DownLoadFile(src, des string) error {
+	res, err := http.Get(src)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	out, err := os.Create(des)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, res.Body)
+	return err
 }

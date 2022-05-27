@@ -6,6 +6,7 @@ import (
 	"fmt"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
 	"path/filepath"
+	"sobey-runtime/common"
 	util "sobey-runtime/utils"
 	"strings"
 	"time"
@@ -199,7 +200,7 @@ func (ss *sobeyService) PodSandboxStatus(ctx context.Context, req *runtimeapi.Po
 }
 func (ss *sobeyService) ListPodSandbox(ctx context.Context, req *runtimeapi.ListPodSandboxRequest) (*runtimeapi.ListPodSandboxResponse, error) {
 	filter := req.GetFilter()
-	results, err := ss.dbService.GetByPrefix("sandbox")
+	results, err := ss.dbService.GetByPrefix(ctx, "sandbox")
 	if err != nil {
 		return &runtimeapi.ListPodSandboxResponse{}, err
 	}
@@ -222,25 +223,44 @@ func (ss *sobeyService) ListPodSandbox(ctx context.Context, req *runtimeapi.List
 			Annotations: config.Config.Annotations,
 		})
 	}
-	if len(items) == 0 {
-		return &runtimeapi.ListPodSandboxResponse{Items: items}, nil
+	return &runtimeapi.ListPodSandboxResponse{Items: filterPodSandbox(filter, items)}, nil
+}
+
+func filterPodSandbox(filter *runtimeapi.PodSandboxFilter, podSandboxes []*runtimeapi.PodSandbox) []*runtimeapi.PodSandbox {
+	if filter == nil {
+		return podSandboxes
 	}
-	var result []*runtimeapi.PodSandbox
-	if filter != nil {
-		for _, item := range items {
-			if filter.LabelSelector != nil {
-				if len(filter.LabelSelector["io.kubernetes.pod.uid"]) != 0 {
-					if strings.EqualFold(filter.LabelSelector["io.kubernetes.pod.uid"], item.Metadata.Uid) {
-						result = append(result, item)
-					}
-				}
+	var idFilterItems []*runtimeapi.PodSandbox
+	if len(filter.Id) != 0 {
+		for _, item := range podSandboxes {
+			if strings.EqualFold(filter.Id, item.Id) {
+				idFilterItems = append(idFilterItems, item)
 			}
 		}
 	} else {
-		result = items
+		idFilterItems = podSandboxes
 	}
-
-	return &runtimeapi.ListPodSandboxResponse{Items: result}, nil
+	var stateFilterItems []*runtimeapi.PodSandbox
+	if filter.State != nil {
+		for _, item := range idFilterItems {
+			if item.State == filter.State.State {
+				stateFilterItems = append(stateFilterItems, item)
+			}
+		}
+	} else {
+		stateFilterItems = idFilterItems
+	}
+	var uidFilterItems []*runtimeapi.PodSandbox
+	if len(filter.LabelSelector[common.KubernetesPodUIDLabel]) != 0 {
+		for _, item := range stateFilterItems {
+			if strings.EqualFold(filter.LabelSelector[common.KubernetesPodUIDLabel], item.Labels[common.KubernetesPodUIDLabel]) {
+				uidFilterItems = append(uidFilterItems, item)
+			}
+		}
+	} else {
+		uidFilterItems = stateFilterItems
+	}
+	return uidFilterItems
 }
 
 // networkNamespaceMode returns the network runtimeapi.NamespaceMode for this container.

@@ -58,7 +58,7 @@ type ContainerStopRequest struct {
 
 func (ss *sobeyService) ListContainers(ctx context.Context, req *runtimeapi.ListContainersRequest) (*runtimeapi.ListContainersResponse, error) {
 	var result []*runtimeapi.Container
-	containerInfos, err := ss.dbService.GetByPrefix("container")
+	containerInfos, err := ss.dbService.GetByPrefix(ctx, "container")
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (ss *sobeyService) ListContainers(ctx context.Context, req *runtimeapi.List
 		}
 		sobeyContainers = filterContainers(req.GetFilter(), sobeyContainers)
 		for _, containerInfo := range sobeyContainers {
-			metadata, err := util.ParseContainerName(containerInfo.Name)
+			metadata, err := util.ParseContainerName(containerInfo.ContainerName)
 			if err != nil {
 				return nil, err
 			}
@@ -195,8 +195,8 @@ func (ss *sobeyService) CreateContainer(ctx context.Context, req *runtimeapi.Cre
 	}
 	containerInfo := SobeyContainer{
 		ID:               containerID,
-		Name:             containerName,
-		ContainerName:    config.Metadata.Name,
+		Name:             config.Metadata.Name,
+		ContainerName:    containerName,
 		Repo:             ss.repo,
 		Image:            image,
 		PortMapping:      sandboxConfig.PortMappings,
@@ -232,11 +232,8 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 		return nil, err
 	}
 
-	// create the log file
-	logFilePath := containerInfo.Labels[common.ContainerLogPathLabelKey]
-	_, err = ss.os.Create(logFilePath)
-	if err != nil {
-		return nil, err
+	if containerInfo.State == runtimeapi.ContainerState_CONTAINER_RUNNING {
+		return &runtimeapi.StartContainerResponse{}, nil
 	}
 	// send http request to start a server
 	startRes, err := startServer(containerInfo, ss.runServerApiUrl)
@@ -247,8 +244,8 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 	containerInfo.ServerHost = ss.host
 	containerInfo.ServerPort = startRes.Port
 	containerInfo.Pid = startRes.Pid
-	containerInfo.StartedAt = startRes.UpTime * 1000
-	containerInfo.FinishedAt = time.Now().UnixNano()
+	containerInfo.StartedAt = startRes.UpTime * 1000000
+	containerInfo.FinishedAt = startRes.UpTime*1000000 + 1000
 	containerInfo.State = runtimeapi.ContainerState_CONTAINER_RUNNING
 	bytes, err := json.Marshal(containerInfo)
 	if err != nil {
@@ -260,7 +257,7 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 	}
 	realPath := containerInfo.Path
 	path := containerInfo.Labels[common.ContainerLogPathLabelKey]
-	if len(realPath) != 0 {
+	if realPath != "" {
 		// Delete possibly existing file first
 		if err = ss.os.Remove(path); err == nil {
 			klog.InfoS("Deleted previously existing symlink file", "path", path)
@@ -276,7 +273,7 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 func startServer(info SobeyContainer, url string) (*ContainerStartResponse, error) {
 
 	req := ContainerStartRequest{
-		Name:   info.ContainerName,
+		Name:   info.Name,
 		Image:  fmt.Sprintf("%s%s", info.Repo, info.Image),
 		LogDir: info.Path,
 	}
@@ -391,7 +388,7 @@ func (ss *sobeyService) ContainerStatus(ctx context.Context, req *runtimeapi.Con
 	}
 	imageID := util.ToPullableImageID(containerInfo.Image, true)
 
-	metadata, err := util.ParseContainerName(containerInfo.Name)
+	metadata, err := util.ParseContainerName(containerInfo.ContainerName)
 	if err != nil {
 		return nil, err
 	}

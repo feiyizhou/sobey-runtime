@@ -124,9 +124,7 @@ func (ds *DBService) Get(key string) (string, error) {
 	return string(getResp.Kvs[0].Value), err
 }
 
-func (ds *DBService) GetByPrefix(prefix string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(3)*time.Second)
-	defer cancel()
+func (ds *DBService) GetByPrefix(ctx context.Context, prefix string) ([]string, error) {
 	getResp, err := db.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		klog.ErrorS(err, "failed to get record", "prefix", prefix)

@@ -5,6 +5,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
+	"sobey-runtime/common"
 	"time"
 )
 
@@ -48,7 +49,29 @@ func (ss *sobeyService) PortForward(ctx context.Context, req *runtimeapi.PortFor
 }
 
 func (ss *sobeyService) ListContainerStats(ctx context.Context, req *runtimeapi.ListContainerStatsRequest) (*runtimeapi.ListContainerStatsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListContainerStats not implemented")
+	containerStatsFilter := req.GetFilter()
+	filter := &runtimeapi.ContainerFilter{}
+
+	if containerStatsFilter != nil {
+		filter.Id = containerStatsFilter.Id
+		filter.PodSandboxId = containerStatsFilter.PodSandboxId
+		filter.LabelSelector = containerStatsFilter.LabelSelector
+	}
+	listResp, err := ss.ListContainers(ctx, &runtimeapi.ListContainersRequest{Filter: filter})
+	if err != nil {
+		return nil, err
+	}
+	var stats []*runtimeapi.ContainerStats
+	for _, container := range listResp.Containers {
+		containerStats, err := ss.getContainerStats(container)
+		if err != nil {
+			return nil, err
+		}
+		if containerStats != nil {
+			stats = append(stats, containerStats)
+		}
+	}
+	return &runtimeapi.ListContainerStatsResponse{Stats: stats}, nil
 }
 
 func (ss *sobeyService) UpdateRuntimeConfig(ctx context.Context, req *runtimeapi.UpdateRuntimeConfigRequest) (*runtimeapi.UpdateRuntimeConfigResponse, error) {
@@ -66,4 +89,31 @@ func (ss *sobeyService) Status(ctx context.Context, req *runtimeapi.StatusReques
 	conditions := []*runtimeapi.RuntimeCondition{runtimeReady, networkReady}
 	runtimeStatus := &runtimeapi.RuntimeStatus{Conditions: conditions}
 	return &runtimeapi.StatusResponse{Status: runtimeStatus}, nil
+}
+
+func (ss *sobeyService) getContainerStats(c *runtimeapi.Container) (*runtimeapi.ContainerStats, error) {
+	timestamp := time.Now().UnixNano()
+	containerStats := &runtimeapi.ContainerStats{
+		Attributes: &runtimeapi.ContainerAttributes{
+			Id:          c.Id,
+			Metadata:    c.Metadata,
+			Labels:      c.Labels,
+			Annotations: c.Annotations,
+		},
+		// TODO calculate every server physic usage
+		Cpu: &runtimeapi.CpuUsage{
+			Timestamp:            timestamp,
+			UsageCoreNanoSeconds: &runtimeapi.UInt64Value{Value: 1},
+		},
+		Memory: &runtimeapi.MemoryUsage{
+			Timestamp:       timestamp,
+			WorkingSetBytes: &runtimeapi.UInt64Value{Value: 1},
+		},
+		WritableLayer: &runtimeapi.FilesystemUsage{
+			Timestamp: timestamp,
+			FsId:      &runtimeapi.FilesystemIdentifier{Mountpoint: common.ServerImageDirPath},
+			UsedBytes: &runtimeapi.UInt64Value{Value: 1},
+		},
+	}
+	return containerStats, nil
 }

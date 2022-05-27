@@ -1,6 +1,7 @@
 package etcd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sobey-runtime/config"
@@ -53,7 +54,7 @@ func TestDBService_PutWithPrefix(t *testing.T) {
 
 func TestDBService_GetByPrefix(t *testing.T) {
 	_ = InitEtcd(etcdConf)
-	responses, _ := NewDBService().GetByPrefix("container")
+	responses, _ := NewDBService().GetByPrefix(context.Background(), "container")
 	for _, response := range responses {
 		fmt.Println(response)
 	}
