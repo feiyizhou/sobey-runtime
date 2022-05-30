@@ -57,7 +57,7 @@ type ContainerStopRequest struct {
 
 func (ss *sobeyService) ListContainers(ctx context.Context, req *runtimeapi.ListContainersRequest) (*runtimeapi.ListContainersResponse, error) {
 	var result []*runtimeapi.Container
-	containerInfos, err := ss.dbService.GetByPrefix(ctx, "container")
+	containerInfos, err := ss.dbService.GetByPrefix(common.ContainerIDPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +112,8 @@ func filterContainers(filter *runtimeapi.ContainerFilter, containers []*SobeyCon
 	var sandboxIdFilterItems []*SobeyContainer
 	if len(filter.PodSandboxId) != 0 {
 		for _, containerInfo := range idFilterItems {
-			if strings.EqualFold(filter.PodSandboxId,
-				containerInfo.Labels[common.SandboxIDLabelKey]) {
+			if strings.EqualFold(util.RemoveSandboxIDPrefix(filter.PodSandboxId),
+				util.RemoveSandboxIDPrefix(containerInfo.Labels[common.SandboxIDLabelKey])) {
 				sandboxIdFilterItems = append(sandboxIdFilterItems, containerInfo)
 			}
 		}
@@ -147,13 +147,12 @@ func filterContainers(filter *runtimeapi.ContainerFilter, containers []*SobeyCon
 }
 
 func (ss *sobeyService) CreateContainer(ctx context.Context, req *runtimeapi.CreateContainerRequest) (*runtimeapi.CreateContainerResponse, error) {
-	podSandboxID := req.PodSandboxId
 	config := req.GetConfig()
-	sandboxConfig := req.GetSandboxConfig()
-
 	if config == nil {
 		return nil, fmt.Errorf("container config is nil")
 	}
+
+	sandboxConfig := req.GetSandboxConfig()
 	if sandboxConfig == nil {
 		return nil, fmt.Errorf("sandbox config is nil for container %q", config.Metadata.Name)
 	}
@@ -161,7 +160,7 @@ func (ss *sobeyService) CreateContainer(ctx context.Context, req *runtimeapi.Cre
 	labels := util.MakeLabels(config.GetLabels(), config.GetAnnotations())
 	labels[common.ContainerTypeLabelKey] = common.ContainerTypeLabelContainer
 	labels[common.ContainerLogPathLabelKey] = filepath.Join(sandboxConfig.LogDirectory, config.LogPath)
-	labels[common.SandboxIDLabelKey] = podSandboxID
+	labels[common.SandboxIDLabelKey] = util.RemoveSandboxIDPrefix(req.PodSandboxId)
 
 	dirArr := []string{sandboxConfig.LogDirectory}
 	tailDirArr := strings.Split(config.LogPath, string(os.PathSeparator))
@@ -216,8 +215,9 @@ func (ss *sobeyService) CreateContainer(ctx context.Context, req *runtimeapi.Cre
 	}
 	return &runtimeapi.CreateContainerResponse{ContainerId: containerID}, nil
 }
+
 func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.StartContainerRequest) (*runtimeapi.StartContainerResponse, error) {
-	res, err := ss.dbService.Get(fmt.Sprintf("container_%s", req.ContainerId))
+	res, err := ss.dbService.Get(util.BuildContainerID(req.ContainerId))
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +249,7 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 	if err != nil {
 		return nil, err
 	}
-	err = ss.dbService.PutWithPrefix("container", containerInfo.ID, string(bytes))
+	err = ss.dbService.PutWithPrefix(common.ContainerIDPrefix, containerInfo.ID, string(bytes))
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +269,6 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 }
 
 func startServer(info SobeyContainer, url string) (*ContainerStartResponse, error) {
-
 	metadata, err := util.ParseContainerName(info.Name)
 	if err != nil {
 		return nil, err
@@ -296,18 +295,13 @@ func startServer(info SobeyContainer, url string) (*ContainerStartResponse, erro
 }
 
 func (ss *sobeyService) StopContainer(ctx context.Context, req *runtimeapi.StopContainerRequest) (*runtimeapi.StopContainerResponse, error) {
-	var containerID string
-	if strings.Contains(req.ContainerId, "container") {
-		containerID = req.ContainerId
-	} else {
-		containerID = fmt.Sprintf("container_%s", req.ContainerId)
-	}
-	res, err := ss.dbService.Get(containerID)
+	res, err := ss.dbService.Get(util.BuildContainerID(req.ContainerId))
 	if err != nil {
 		return nil, err
 	}
 	if len(res) == 0 {
-		return nil, fmt.Errorf("Container is not existed, containerId : %s ", containerID)
+		klog.InfoS("When stop container, container is not existed", "containerID", req.ContainerId)
+		return &runtimeapi.StopContainerResponse{}, nil
 	}
 	containerInfo := SobeyContainer{}
 	err = json.Unmarshal([]byte(res), &containerInfo)
@@ -323,7 +317,7 @@ func (ss *sobeyService) StopContainer(ctx context.Context, req *runtimeapi.StopC
 	if err != nil {
 		return nil, err
 	}
-	err = ss.dbService.PutWithPrefix("container", req.ContainerId, string(bytes))
+	err = ss.dbService.PutWithPrefix(common.ContainerIDPrefix, containerInfo.ID, string(bytes))
 	if err != nil {
 		return nil, err
 	}
@@ -344,13 +338,13 @@ func stopServer(info SobeyContainer, url string) error {
 }
 
 func (ss *sobeyService) RemoveContainer(ctx context.Context, req *runtimeapi.RemoveContainerRequest) (*runtimeapi.RemoveContainerResponse, error) {
-	containerID := fmt.Sprintf("container_%s", req.ContainerId)
-	res, err := ss.dbService.Get(containerID)
+	res, err := ss.dbService.Get(util.BuildContainerID(req.ContainerId))
 	if err != nil {
 		return nil, err
 	}
 	if len(res) == 0 {
-		return nil, fmt.Errorf(fmt.Sprintf("Container is not existed, containerID : %s ", containerID))
+		klog.InfoS("When remove container, container is not existed", "containerID", req.ContainerId)
+		return &runtimeapi.RemoveContainerResponse{}, nil
 	}
 	containerInfo := SobeyContainer{}
 	err = json.Unmarshal([]byte(res), &containerInfo)
@@ -358,13 +352,13 @@ func (ss *sobeyService) RemoveContainer(ctx context.Context, req *runtimeapi.Rem
 		return nil, err
 	}
 	if containerInfo.State != runtimeapi.ContainerState_CONTAINER_EXITED {
-		return nil, fmt.Errorf(fmt.Sprintf("Container is not stoped, please stop the container before remove, containerID : %s ", containerID))
+		return nil, fmt.Errorf(fmt.Sprintf("Container is not stoped, please stop the container before remove, containerID : %s ", req.ContainerId))
 	}
 	err = ss.os.Remove(containerInfo.Path)
 	if err != nil {
 		fmt.Printf("remove path file err, path: %s, err: %v", containerInfo.Path, err)
 	}
-	err = ss.dbService.Delete(containerID)
+	err = ss.dbService.Delete(util.BuildContainerID(req.ContainerId))
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +366,7 @@ func (ss *sobeyService) RemoveContainer(ctx context.Context, req *runtimeapi.Rem
 }
 
 func (ss *sobeyService) ContainerStatus(ctx context.Context, req *runtimeapi.ContainerStatusRequest) (*runtimeapi.ContainerStatusResponse, error) {
-	res, err := ss.dbService.Get(fmt.Sprintf("container_%s", req.ContainerId))
+	res, err := ss.dbService.Get(util.BuildContainerID(req.ContainerId))
 	if err != nil {
 		return nil, err
 	}

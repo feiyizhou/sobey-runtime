@@ -1,7 +1,6 @@
 package etcd
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"sobey-runtime/config"
@@ -14,10 +13,12 @@ type Demo struct {
 }
 
 var etcdConf = &config.Etcd{
-	RootCertPath:      "/opt/etcd/ssl/ca.pem",
-	ClientCertPath:    "/opt/etcd/ssl/server.pem",
-	ClientKeyCertPath: "/opt/etcd/ssl/server-key.pem",
-	EndPoints:         []string{"https://172.16.166.87:2379"},
+	RootCertPath:      "/root/k8s/tmp/ca.pem",
+	ClientCertPath:    "/root/k8s/tmp/server.pem",
+	ClientKeyCertPath: "/root/k8s/tmp/server-key.pem",
+	EndPoints: []string{"https://172.16.200.167:2379",
+		"https://172.16.200.168:2379",
+		"https://172.16.200.169:2379"},
 }
 
 func TestDBService_Put(t *testing.T) {
@@ -54,7 +55,7 @@ func TestDBService_PutWithPrefix(t *testing.T) {
 
 func TestDBService_GetByPrefix(t *testing.T) {
 	_ = InitEtcd(etcdConf)
-	responses, _ := NewDBService().GetByPrefix(context.Background(), "container")
+	responses, _ := NewDBService().GetByPrefix("test")
 	for _, response := range responses {
 		fmt.Println(response)
 	}
@@ -63,7 +64,6 @@ func TestDBService_GetByPrefix(t *testing.T) {
 
 func TestDBService_DeleteByPrefix(t *testing.T) {
 	_ = InitEtcd(etcdConf)
-	_ = NewDBService().DeleteByPrefix("sandbox")
-	_ = NewDBService().DeleteByPrefix("container")
+	_ = NewDBService().DeleteByPrefix("test")
 	defer func() { _ = db.Close() }()
 }

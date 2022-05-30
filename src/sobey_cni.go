@@ -23,7 +23,6 @@ func (ss *sobeyService) InitIpRange() error {
 
 func (ss *sobeyService) NewSandboxIP() (string, error) {
 	var ip string
-
 	var releasedIPMap map[string]struct{}
 	releasedIPStr, err := ss.dbService.Get("releasedIp")
 	if err != nil {

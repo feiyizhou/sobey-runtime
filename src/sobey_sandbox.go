@@ -43,17 +43,17 @@ func (ss *sobeyService) clearNetworkReady(podSandboxID string) {
 func (ss *sobeyService) RunPodSandbox(ctx context.Context, req *runtimeapi.RunPodSandboxRequest) (*runtimeapi.RunPodSandboxResponse, error) {
 	config := req.GetConfig()
 	sandboxID := util.RandomString()
-	sobeyConf := SobeySandbox{}
-	sobeyConf.Config = config
-	sobeyConf.CreateTime = time.Now().UnixNano()
-	sobeyConf.ID = sandboxID
-	sobeyConf.State = runtimeapi.PodSandboxState_SANDBOX_READY
+	sandboxInfo := SobeySandbox{}
+	sandboxInfo.Config = config
+	sandboxInfo.CreateTime = time.Now().UnixNano()
+	sandboxInfo.ID = sandboxID
+	sandboxInfo.State = runtimeapi.PodSandboxState_SANDBOX_READY
 	ip, err := ss.NewSandboxIP()
 	if err != nil {
 		return nil, err
 	}
-	sobeyConf.IP = ip
-	configBytes, err := json.Marshal(sobeyConf)
+	sandboxInfo.IP = ip
+	configBytes, err := json.Marshal(sandboxInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (ss *sobeyService) RunPodSandbox(ctx context.Context, req *runtimeapi.RunPo
 	if err != nil {
 		fmt.Printf("Create pod log directory err, err: %v", err)
 	}
-	err = ss.dbService.PutWithPrefix("sandbox", sandboxID, string(configBytes))
+	err = ss.dbService.PutWithPrefix(common.SandboxIDPrefix, sandboxID, string(configBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -69,11 +69,10 @@ func (ss *sobeyService) RunPodSandbox(ctx context.Context, req *runtimeapi.RunPo
 	resp := &runtimeapi.RunPodSandboxResponse{PodSandboxId: sandboxID}
 	return resp, nil
 }
-func (ss *sobeyService) StopPodSandbox(ctx context.Context, req *runtimeapi.StopPodSandboxRequest) (*runtimeapi.StopPodSandboxResponse, error) {
-	sandboxID := fmt.Sprintf("sandbox_%s", req.PodSandboxId)
 
+func (ss *sobeyService) StopPodSandbox(ctx context.Context, req *runtimeapi.StopPodSandboxRequest) (*runtimeapi.StopPodSandboxResponse, error) {
 	// 1.Get the sandbox info from etcd
-	sandboxInfoStr, err := ss.dbService.Get(sandboxID)
+	sandboxInfoStr, err := ss.dbService.Get(util.BuildSandboxID(req.PodSandboxId))
 	if err != nil {
 		return nil, err
 	}
@@ -84,9 +83,9 @@ func (ss *sobeyService) StopPodSandbox(ctx context.Context, req *runtimeapi.Stop
 	}
 
 	// 2.Set network to notReady and release the IP of sandbox
-	ready, ok := ss.getNetworkReady(sandboxID)
+	ready, ok := ss.getNetworkReady(sandboxInfo.ID)
 	if ready || !ok {
-		ss.setNetworkReady(sandboxID, false)
+		ss.setNetworkReady(sandboxInfo.ID, false)
 	}
 	err = ss.PutReleasedIP(sandboxInfo.IP)
 	if err != nil {
@@ -99,12 +98,10 @@ func (ss *sobeyService) StopPodSandbox(ctx context.Context, req *runtimeapi.Stop
 	if err != nil {
 		return nil, err
 	}
-
-	err = ss.dbService.PutWithPrefix("sandbox", req.PodSandboxId, string(sandboxBytes))
+	err = ss.dbService.PutWithPrefix(common.SandboxIDPrefix, sandboxInfo.ID, string(sandboxBytes))
 	if err != nil {
 		return nil, err
 	}
-
 	return &runtimeapi.StopPodSandboxResponse{}, nil
 }
 func (ss *sobeyService) RemovePodSandbox(ctx context.Context, req *runtimeapi.RemovePodSandboxRequest) (*runtimeapi.RemovePodSandboxResponse, error) {
@@ -121,7 +118,7 @@ func (ss *sobeyService) RemovePodSandbox(ctx context.Context, req *runtimeapi.Re
 	if containers != nil {
 		for _, container := range containers.Containers {
 			_, err = ss.RemoveContainer(ctx, &runtimeapi.RemoveContainerRequest{
-				ContainerId: container.Id,
+				ContainerId: util.RemoveContainerIDPrefix(container.Id),
 			})
 			if err != nil {
 				return nil, err
@@ -129,9 +126,8 @@ func (ss *sobeyService) RemovePodSandbox(ctx context.Context, req *runtimeapi.Re
 		}
 	}
 
-	sandboxID := fmt.Sprintf("sandbox_%s", req.PodSandboxId)
-
 	// 2.Remove the sandbox
+	sandboxID := util.BuildSandboxID(req.PodSandboxId)
 	err = ss.dbService.Delete(sandboxID)
 	if err != nil {
 		return nil, err
@@ -141,9 +137,12 @@ func (ss *sobeyService) RemovePodSandbox(ctx context.Context, req *runtimeapi.Re
 }
 func (ss *sobeyService) PodSandboxStatus(ctx context.Context, req *runtimeapi.PodSandboxStatusRequest) (*runtimeapi.PodSandboxStatusResponse, error) {
 	// 1. Get sandbox info by sandbox ID from etcd
-	sandboxInfoStr, err := ss.dbService.Get(fmt.Sprintf("sandbox_%s", req.PodSandboxId))
+	sandboxInfoStr, err := ss.dbService.Get(util.BuildSandboxID(req.PodSandboxId))
 	if err != nil {
 		return nil, err
+	}
+	if len(sandboxInfoStr) == 0 {
+		return nil, fmt.Errorf("Sandbox is not exist, sandboxID: %s ", req.PodSandboxId)
 	}
 	sandbox := new(SobeySandbox)
 	err = json.Unmarshal([]byte(sandboxInfoStr), &sandbox)
@@ -164,7 +163,7 @@ func (ss *sobeyService) PodSandboxStatus(ctx context.Context, req *runtimeapi.Po
 	}
 
 	sandboxStatus := &runtimeapi.PodSandboxStatus{
-		Id:        req.PodSandboxId,
+		Id:        sandbox.ID,
 		State:     sandbox.State,
 		CreatedAt: sandbox.CreateTime,
 		Metadata: &runtimeapi.PodSandboxMetadata{
@@ -190,9 +189,9 @@ func (ss *sobeyService) PodSandboxStatus(ctx context.Context, req *runtimeapi.Po
 	}
 	// add additional IPs
 	additionalPodIPs := make([]*runtimeapi.PodIP, 0, len(ips))
-	for _, ip := range ips {
+	for _, ipItem := range ips {
 		additionalPodIPs = append(additionalPodIPs, &runtimeapi.PodIP{
-			Ip: ip,
+			Ip: ipItem,
 		})
 	}
 	sandboxStatus.Network.AdditionalIps = additionalPodIPs
@@ -200,7 +199,7 @@ func (ss *sobeyService) PodSandboxStatus(ctx context.Context, req *runtimeapi.Po
 }
 func (ss *sobeyService) ListPodSandbox(ctx context.Context, req *runtimeapi.ListPodSandboxRequest) (*runtimeapi.ListPodSandboxResponse, error) {
 	filter := req.GetFilter()
-	results, err := ss.dbService.GetByPrefix(ctx, "sandbox")
+	results, err := ss.dbService.GetByPrefix(common.SandboxIDPrefix)
 	if err != nil {
 		return &runtimeapi.ListPodSandboxResponse{}, err
 	}
