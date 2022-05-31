@@ -17,6 +17,7 @@ type SobeySandbox struct {
 	ID         string                     `json:"id"`
 	IP         string                     `json:"ip"`
 	State      runtimeapi.PodSandboxState `json:"state"`
+	Hostname   string                     `json:"hostname"`
 	CreateTime int64                      `json:"createTime"`
 }
 
@@ -48,6 +49,7 @@ func (ss *sobeyService) RunPodSandbox(ctx context.Context, req *runtimeapi.RunPo
 	sandboxInfo.CreateTime = time.Now().UnixNano()
 	sandboxInfo.ID = sandboxID
 	sandboxInfo.State = runtimeapi.PodSandboxState_SANDBOX_READY
+	sandboxInfo.Hostname, _ = ss.os.Hostname()
 	ip, err := ss.NewSandboxIP()
 	if err != nil {
 		return nil, err
@@ -207,20 +209,26 @@ func (ss *sobeyService) ListPodSandbox(ctx context.Context, req *runtimeapi.List
 		return &runtimeapi.ListPodSandboxResponse{}, err
 	}
 	var items []*runtimeapi.PodSandbox
+	hostName, _ := ss.os.Hostname()
 	for _, result := range results {
 		config := new(SobeySandbox)
 		err = json.Unmarshal([]byte(result), &config)
 		if err != nil {
 			return &runtimeapi.ListPodSandboxResponse{}, err
 		}
-		items = append(items, &runtimeapi.PodSandbox{
-			Id:          config.ID,
-			Metadata:    config.Config.Metadata,
-			State:       config.State,
-			CreatedAt:   config.CreateTime,
-			Labels:      config.Config.Labels,
-			Annotations: config.Config.Annotations,
-		})
+		if strings.EqualFold(hostName, config.Hostname) {
+			items = append(items, &runtimeapi.PodSandbox{
+				Id:          config.ID,
+				Metadata:    config.Config.Metadata,
+				State:       config.State,
+				CreatedAt:   config.CreateTime,
+				Labels:      config.Config.Labels,
+				Annotations: config.Config.Annotations,
+			})
+		}
+	}
+	if len(items) == 0 {
+		return &runtimeapi.ListPodSandboxResponse{Items: items}, nil
 	}
 	return &runtimeapi.ListPodSandboxResponse{Items: filterPodSandbox(filter, items)}, nil
 }

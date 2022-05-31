@@ -61,49 +61,46 @@ func InitEtcd(conf *config.Etcd) error {
 func (ds *DBService) Put(key, val string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(3)*time.Second)
 	defer cancel()
-	putResp, err := db.Put(ctx, key, val)
+	_, err := db.Put(ctx, key, val)
 	if err != nil {
 		klog.ErrorS(err, "failed to put record to etcd", "key", key, "value", val)
 		return err
 	}
-	klog.V(9).InfoS("success insert record to etcd", "res", putResp)
 	return err
 }
 
 func (ds *DBService) PutWithPrefix(prefix, key, val string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(5)*time.Second)
 	defer cancel()
-	putResp, err := db.Put(ctx, fmt.Sprintf("%s_%s", prefix, key), val, clientv3.WithPrevKV())
+	_, err := db.Put(ctx, fmt.Sprintf("%s_%s", prefix, key), val, clientv3.WithPrevKV())
 	if err != nil {
 		klog.ErrorS(err, "failed to put record to etcd", "key", fmt.Sprintf("%s_%s", prefix, key), "value", val)
 		return err
 	}
-	klog.V(9).InfoS("success insert record to etcd", "res", putResp)
 	return err
 }
 
 func (ds *DBService) Delete(key string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(3)*time.Second)
 	defer cancel()
-	delResp, err := db.Delete(ctx, key)
+	_, err := db.Delete(ctx, key)
 	if err != nil {
 		klog.ErrorS(err, "failed to delete record", "key", key)
 		return err
 	}
-	klog.V(9).InfoS("delete record successfully", "res", delResp)
 	return err
 }
 
 func (ds *DBService) DeleteByPrefix(prefix string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(5)*time.Second)
 	defer cancel()
-	getResp, err := db.Delete(ctx, prefix, clientv3.WithPrefix())
+	delResp, err := db.Delete(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		klog.ErrorS(err, "failed to delete record", "prefix", prefix)
 		return err
 	}
-	if getResp.Deleted == 0 {
-		klog.V(9).InfoS("record does not exist", "prefix", prefix)
+	if delResp.Deleted == 0 {
+		klog.InfoS("record does not exist", "prefix", prefix)
 		return err
 	}
 	return err

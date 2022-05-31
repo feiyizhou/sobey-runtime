@@ -19,6 +19,7 @@ import (
 type SobeyContainer struct {
 	ID               string                       `json:"id"`
 	Name             string                       `json:"name"`
+	Hostname         string                       `json:"hostname"`
 	ServerName       string                       `json:"serverName"`
 	ServerHost       string                       `json:"serverHost"`
 	ServerPort       int                          `json:"serverPort"`
@@ -69,7 +70,13 @@ func (ss *sobeyService) ListContainers(ctx context.Context, req *runtimeapi.List
 			if err != nil {
 				return nil, err
 			}
-			sobeyContainers = append(sobeyContainers, sobeyContainer)
+			hostname, _ := ss.os.Hostname()
+			if strings.EqualFold(hostname, sobeyContainer.Hostname) {
+				sobeyContainers = append(sobeyContainers, sobeyContainer)
+			}
+		}
+		if len(sobeyContainers) == 0 {
+			return &runtimeapi.ListContainersResponse{Containers: result}, nil
 		}
 		sobeyContainers = filterContainers(req.GetFilter(), sobeyContainers)
 		for _, containerInfo := range sobeyContainers {
@@ -191,9 +198,11 @@ func (ss *sobeyService) CreateContainer(ctx context.Context, req *runtimeapi.Cre
 	if err != nil {
 		return nil, err
 	}
+	hostname, _ := ss.os.Hostname()
 	containerInfo := SobeyContainer{
 		ID:               containerID,
 		Name:             containerName,
+		Hostname:         hostname,
 		Repo:             ss.repo,
 		Image:            image,
 		PortMapping:      sandboxConfig.PortMappings,

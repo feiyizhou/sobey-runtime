@@ -1,8 +1,8 @@
 etcd:
-  root-cert-path: /opt/etcd/ssl/ca.pem
-  client-cert-path: /opt/etcd/ssl/server.pem
-  client-key-cert-path: /opt/etcd/ssl/server-key.pem
-  endpoints: [https://172.16.166.87:2379]
+  root-cert-path: /root/k8s/tmp/ca.pem
+  client-cert-path: /root/k8s/tmp/server.pem
+  client-key-cert-path: /root/k8s/tmp/server-key.pem
+  endpoints: [https://172.16.200.167:2379,https://172.16.200.168:2379,https://172.16.200.169:2379]
 
 server:
   host: http://172.16.200.167:9067
