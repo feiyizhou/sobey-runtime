@@ -4,15 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/vishvananda/netns"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
 	"k8s.io/klog/v2"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sobey-runtime/common"
 	util "sobey-runtime/utils"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -45,10 +51,11 @@ type ContainerStartRequest struct {
 }
 
 type ContainerStartResponse struct {
-	Name   string `json:"name"`
-	Pid    string `json:"pid"`
-	Port   int    `json:"port"`
-	UpTime int64  `json:"up_time"`
+	Name         string `json:"name"`
+	Pid          string `json:"pid"`
+	Port         int    `json:"port"`
+	UpTime       int64  `json:"up_time"`
+	FinishedTime int64  `json:"finished_time"`
 }
 
 type ContainerStopRequest struct {
@@ -243,7 +250,7 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 		return &runtimeapi.StartContainerResponse{}, nil
 	}
 	// send http request to start a server
-	startRes, err := startServer(containerInfo, ss.runServerApiUrl)
+	startRes, err := ss.startServer(containerInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -251,8 +258,8 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 	containerInfo.ServerHost = ss.host
 	containerInfo.ServerPort = startRes.Port
 	containerInfo.Pid = startRes.Pid
-	containerInfo.StartedAt = startRes.UpTime * 1000000
-	containerInfo.FinishedAt = startRes.UpTime*1000000 + 1000
+	containerInfo.StartedAt = startRes.UpTime
+	containerInfo.FinishedAt = startRes.UpTime + 1000
 	containerInfo.State = runtimeapi.ContainerState_CONTAINER_RUNNING
 	bytes, err := json.Marshal(containerInfo)
 	if err != nil {
@@ -277,30 +284,73 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 	return &runtimeapi.StartContainerResponse{}, nil
 }
 
-func startServer(info SobeyContainer, url string) (*ContainerStartResponse, error) {
-	metadata, err := util.ParseContainerName(info.Name)
+func (ss *sobeyService) startServer(info SobeyContainer) (*ContainerStartResponse, error) {
+
+	// 1.Get the sandbox info from etcd
+	sandboxInfoStr, err := ss.dbService.Get(util.BuildSandboxID(info.Labels[common.SandboxIDLabelKey]))
 	if err != nil {
 		return nil, err
 	}
-	req := ContainerStartRequest{
-		Name:   metadata.Name,
-		Image:  fmt.Sprintf("%s%s", info.Repo, info.Image),
-		LogDir: info.Path,
-	}
-	reqBytes, err := json.Marshal(req)
+	sandboxInfo := new(SobeySandbox)
+	err = json.Unmarshal([]byte(sandboxInfoStr), &sandboxInfo)
 	if err != nil {
 		return nil, err
 	}
-	resStr, err := util.HttpPost(url, string(reqBytes))
+
+	// 2.Open an output file for command stdout
+	myOut, err := os.OpenFile("myOut.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	if err != nil {
+		fmt.Printf("打开日志文件错误：%s", err)
+		return nil, err
+	}
+
+	// 3.Set the net namespace
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	origns, _ := netns.Get()
+	defer origns.Close()
+
+	sandboxns, _ := netns.GetFromPath(fmt.Sprintf("/proc/%v/ns/net", sandboxInfo.Pid))
+	defer sandboxns.Close()
+
+	err = netns.Set(sandboxns)
 	if err != nil {
 		return nil, err
 	}
-	res := new(ContainerStartResponse)
-	err = json.Unmarshal([]byte(resStr), &res)
+
+	// 4.Start the server
+	args := []string{
+		"-jar",
+		"/root/secret-demo-0.0.1-SNAPSHOT.jar",
+	}
+	command := exec.Command("java", args...)
+	command.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUTS |
+			syscall.CLONE_NEWIPC |
+			syscall.CLONE_NEWPID |
+			syscall.CLONE_NEWNS,
+	}
+	command.Stdin = os.Stdin
+	command.Stdout = myOut
+	command.Stderr = os.Stderr
+	if err = command.Start(); err != nil {
+		log.Fatalln(err)
+		return nil, err
+	}
+
+	// 5.Switch to original net namespace
+	err = netns.Set(origns)
 	if err != nil {
 		return nil, err
 	}
-	return res, err
+
+	return &ContainerStartResponse{
+		Name:   info.Name,
+		Pid:    strconv.Itoa(command.Process.Pid),
+		Port:   0,
+		UpTime: time.Now().UnixNano(),
+	}, err
 }
 
 func (ss *sobeyService) StopContainer(ctx context.Context, req *runtimeapi.StopContainerRequest) (*runtimeapi.StopContainerResponse, error) {
@@ -334,15 +384,34 @@ func (ss *sobeyService) StopContainer(ctx context.Context, req *runtimeapi.StopC
 }
 
 func stopServer(info SobeyContainer, url string) error {
-	req := ContainerStopRequest{
-		Name: info.ServerName,
-		Pid:  info.Pid,
-	}
-	reqBytes, err := json.Marshal(req)
+	myOut, err := os.OpenFile("myOut.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
+		fmt.Printf("打开日志文件错误：%s", err)
 		return err
 	}
-	_, err = util.HttpPost(url, string(reqBytes))
+	args := []string{
+		"-9",
+		info.Pid,
+	}
+	command := exec.Command("kill", args...)
+
+	//req := ContainerStopRequest{
+	//	Name: info.ServerName,
+	//	Pid:  info.Pid,
+	//}
+	//reqBytes, err := json.Marshal(req)
+	//if err != nil {
+	//	return err
+	//}
+	//_, err = util.HttpPost(url, string(reqBytes))
+	//return err
+	command.Stdin = os.Stdin
+	command.Stdout = myOut
+	command.Stderr = os.Stderr
+	if err = command.Start(); err != nil {
+		log.Fatalln(err)
+		return err
+	}
 	return err
 }
 

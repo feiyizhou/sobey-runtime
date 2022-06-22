@@ -4,17 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
+	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
+	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
+	"k8s.io/kubernetes/pkg/kubelet/dockershim"
+	"log"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"sobey-runtime/common"
 	util "sobey-runtime/utils"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 type SobeySandbox struct {
 	Config     *runtimeapi.PodSandboxConfig
 	ID         string                     `json:"id"`
+	Pid        string                     `json:"pid"`
 	IP         string                     `json:"ip"`
 	State      runtimeapi.PodSandboxState `json:"state"`
 	Hostname   string                     `json:"hostname"`
@@ -41,19 +52,65 @@ func (ss *sobeyService) clearNetworkReady(podSandboxID string) {
 	delete(ss.networkReady, podSandboxID)
 }
 
+func toCheckpointProtocol(protocol runtimeapi.Protocol) dockershim.Protocol {
+	switch protocol {
+	case runtimeapi.Protocol_TCP:
+		return dockershim.ProtocolTCP
+	case runtimeapi.Protocol_UDP:
+		return dockershim.ProtocolUDP
+	case runtimeapi.Protocol_SCTP:
+		return dockershim.ProtocolSCTP
+	}
+	klog.InfoS("Unknown protocol, defaulting to TCP", "protocol", protocol)
+	return dockershim.ProtocolTCP
+}
+
+func constructPodSandboxCheckpoint(config *runtimeapi.PodSandboxConfig) checkpointmanager.Checkpoint {
+	data := dockershim.CheckpointData{}
+	for _, pm := range config.GetPortMappings() {
+		proto := toCheckpointProtocol(pm.Protocol)
+		data.PortMappings = append(data.PortMappings, &dockershim.PortMapping{
+			HostPort:      &pm.HostPort,
+			ContainerPort: &pm.ContainerPort,
+			Protocol:      &proto,
+			HostIP:        pm.HostIp,
+		})
+	}
+	if config.GetLinux().GetSecurityContext().GetNamespaceOptions().GetNetwork() == runtimeapi.NamespaceMode_NODE {
+		data.HostNetwork = true
+	}
+	return dockershim.NewPodSandboxCheckpoint(config.Metadata.Namespace, config.Metadata.Name, &data)
+}
+
 func (ss *sobeyService) RunPodSandbox(ctx context.Context, req *runtimeapi.RunPodSandboxRequest) (*runtimeapi.RunPodSandboxResponse, error) {
 	config := req.GetConfig()
 	sandboxID := util.RandomString()
+
+	// 1. Create Sandbox Checkpoint.
+	if err := ss.checkpointManager.CreateCheckpoint(sandboxID, constructPodSandboxCheckpoint(config)); err != nil {
+		return nil, err
+	}
+
+	// 2. Start the sandbonx server
+	pid, err := runSandboxServer()
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Setup the net config for sandbox
+	ip, err := ss.setupNet(pid, config)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4.Store the sandbox info with prefix
 	sandboxInfo := SobeySandbox{}
+	sandboxInfo.Pid = pid
 	sandboxInfo.Config = config
 	sandboxInfo.CreateTime = time.Now().UnixNano()
 	sandboxInfo.ID = sandboxID
 	sandboxInfo.State = runtimeapi.PodSandboxState_SANDBOX_READY
 	sandboxInfo.Hostname, _ = ss.os.Hostname()
-	ip, err := ss.NewSandboxIP()
-	if err != nil {
-		return nil, err
-	}
 	sandboxInfo.IP = ip
 	configBytes, err := json.Marshal(sandboxInfo)
 	if err != nil {
@@ -72,6 +129,107 @@ func (ss *sobeyService) RunPodSandbox(ctx context.Context, req *runtimeapi.RunPo
 	return resp, nil
 }
 
+func (ss *sobeyService) setupNet(id string, config *runtimeapi.PodSandboxConfig) (string, error) {
+	cID := kubecontainer.BuildContainerID(runtimeName, id)
+	networkOptions := make(map[string]string)
+	if dnsConfig := config.GetDnsConfig(); dnsConfig != nil {
+		// Build DNS options.
+		dnsOption, err := json.Marshal(dnsConfig)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal dns config for pod %q: %v",
+				config.Metadata.Name, err)
+		}
+		networkOptions["dns"] = string(dnsOption)
+	}
+	err := ss.network.SetUpPod(config.GetMetadata().Namespace, config.GetMetadata().Name,
+		cID, config.Annotations, networkOptions)
+	if err != nil {
+		errList := []error{fmt.Errorf("failed to set up sandbox container %q network "+
+			"for pod %q: %v", id, config.Metadata.Name, err)}
+		err = ss.network.TearDownPod(config.GetMetadata().Namespace, config.GetMetadata().Name, cID)
+		if err != nil {
+			errList = append(errList, fmt.Errorf("failed to clean up sandbox container "+
+				"%q network for pod %q: %v", id, config.Metadata.Name, err))
+		}
+		// TODO if set up network failed, then stop the sandbox server
+		return "", errList[0]
+	}
+	res := new(CNICache)
+	path := fmt.Sprintf("/var/lib/cni/cache/results/cbr0-%s-eth0", id)
+	buffer, err := ioutil.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	err = json.Unmarshal(buffer, &res)
+	if err != nil {
+		return "", err
+	}
+	address := res.Result.IPS[0].Address
+	if strings.Contains(address, "/") {
+		address = strings.Split(address, "/")[0]
+	}
+	return address, err
+}
+
+type CNICache struct {
+	Kind        string        `json:"kind"`
+	ContainerId string        `json:"containerId"`
+	Config      string        `json:"config"`
+	IfName      string        `json:"ifName"`
+	NetworkName string        `json:"networkName"`
+	Result      CNIExecResult `json:"result"`
+}
+
+type CNIExecResult struct {
+	CNIVersion string                 `json:"cniVersion"`
+	DNS        map[string]interface{} `json:"dns"`
+	Interfaces []NetInterface         `json:"interfaces"`
+	IPS        []IP                   `json:"ips"`
+	Routes     []Route                `json:"routes"`
+}
+
+type NetInterface struct {
+	Mac  string `json:"mac"`
+	Name string `json:"name"`
+}
+
+type IP struct {
+	Address   string `json:"address"`
+	Gateway   string `json:"gateway"`
+	Interface int    `json:"interface"`
+	Version   string `json:"version"`
+}
+
+type Route struct {
+	DST string `json:"dst"`
+	GW  string `json:"gw"`
+}
+
+func runSandboxServer() (string, error) {
+	myOut, err := os.OpenFile("myOut.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	defer myOut.Close()
+	if err != nil {
+		fmt.Printf("打开日志文件错误：%s", err)
+		return "", err
+	}
+	command := exec.Command("pause")
+	command.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUTS |
+			syscall.CLONE_NEWIPC |
+			syscall.CLONE_NEWPID |
+			syscall.CLONE_NEWNS |
+			syscall.CLONE_NEWNET,
+	}
+	command.Stdin = os.Stdin
+	command.Stdout = myOut
+	command.Stderr = os.Stderr
+	if err = command.Start(); err != nil {
+		log.Fatalln(err)
+		return "", err
+	}
+	return strconv.Itoa(command.Process.Pid), err
+}
+
 func (ss *sobeyService) StopPodSandbox(ctx context.Context, req *runtimeapi.StopPodSandboxRequest) (*runtimeapi.StopPodSandboxResponse, error) {
 	// 1.Get the sandbox info from etcd
 	sandboxInfoStr, err := ss.dbService.Get(util.BuildSandboxID(req.PodSandboxId))
@@ -88,13 +246,41 @@ func (ss *sobeyService) StopPodSandbox(ctx context.Context, req *runtimeapi.Stop
 	ready, ok := ss.getNetworkReady(sandboxInfo.ID)
 	if ready || !ok {
 		ss.setNetworkReady(sandboxInfo.ID, false)
+		cID := kubecontainer.BuildContainerID(runtimeName, sandboxInfo.ID)
+		err = ss.network.TearDownPod(sandboxInfo.Config.Metadata.Namespace,
+			sandboxInfo.Config.Metadata.Name, cID)
+		if err == nil {
+			ss.setNetworkReady(sandboxInfo.ID, false)
+		} else {
+			return nil, err
+		}
 	}
 	err = ss.PutReleasedIP(sandboxInfo.IP)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3.Update the state of sandbox to notReady
+	// 3.Stop the process
+	args := []string{
+		"-9",
+		sandboxInfo.Pid,
+	}
+	command := exec.Command("kill", args...)
+	myOut, err := os.OpenFile("myOut.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	defer myOut.Close()
+	if err != nil {
+		fmt.Printf("打开日志文件错误：%s", err)
+		return nil, err
+	}
+	command.Stdin = os.Stdin
+	command.Stdout = myOut
+	command.Stderr = os.Stderr
+	if err = command.Start(); err != nil {
+		log.Fatalln(err)
+		return nil, err
+	}
+
+	// 4.Update the state of sandbox to notReady
 	sandboxInfo.State = runtimeapi.PodSandboxState_SANDBOX_NOTREADY
 	sandboxBytes, err := json.Marshal(sandboxInfo)
 	if err != nil {

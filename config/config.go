@@ -38,9 +38,7 @@ func InitConf() error {
 	viper.AddConfigPath(*cond)
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
-	viper.AddConfigPath("config")
-	viper.AddConfigPath("/etc/feeds/")
-	viper.AddConfigPath("$HOME/.feeds")
+	viper.AddConfigPath(".")
 	err := viper.ReadInConfig()
 	if err != nil {
 		return fmt.Errorf("Fatal error config file: %s \n", err)
