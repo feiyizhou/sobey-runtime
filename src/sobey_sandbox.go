@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"sobey-runtime/common"
 	util "sobey-runtime/utils"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -206,28 +205,20 @@ type Route struct {
 }
 
 func runSandboxServer() (string, error) {
-	myOut, err := os.OpenFile("myOut.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
-	defer myOut.Close()
-	if err != nil {
-		fmt.Printf("打开日志文件错误：%s", err)
-		return "", err
+	args := []string{
+		"-c",
+		"pause",
 	}
-	command := exec.Command("pause")
-	command.SysProcAttr = &syscall.SysProcAttr{
+
+	return util.Exec("/bin/sh", args, &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUTS |
 			syscall.CLONE_NEWIPC |
 			syscall.CLONE_NEWPID |
 			syscall.CLONE_NEWNS |
-			syscall.CLONE_NEWNET,
-	}
-	command.Stdin = os.Stdin
-	command.Stdout = myOut
-	command.Stderr = os.Stderr
-	if err = command.Start(); err != nil {
-		log.Fatalln(err)
-		return "", err
-	}
-	return strconv.Itoa(command.Process.Pid), err
+			syscall.CLONE_NEWNET |
+			syscall.CLONE_NEWUSER,
+	}, "", "", "")
+
 }
 
 func (ss *sobeyService) StopPodSandbox(ctx context.Context, req *runtimeapi.StopPodSandboxRequest) (*runtimeapi.StopPodSandboxResponse, error) {

@@ -16,7 +16,6 @@ import (
 	"runtime"
 	"sobey-runtime/common"
 	util "sobey-runtime/utils"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -249,8 +248,14 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 	if containerInfo.State == runtimeapi.ContainerState_CONTAINER_RUNNING {
 		return &runtimeapi.StartContainerResponse{}, nil
 	}
-	// send http request to start a server
-	startRes, err := ss.startServer(containerInfo)
+	// Start a server
+	// TODO only for show, check the image is nginx, then start nginx process
+	var startRes *ContainerStartResponse
+	if strings.Contains(containerInfo.Image, "nginx") {
+		startRes, err = ss.startNginx(containerInfo)
+	} else {
+		startRes, err = ss.startServer(containerInfo)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +289,7 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 	return &runtimeapi.StartContainerResponse{}, nil
 }
 
-func (ss *sobeyService) startServer(info SobeyContainer) (*ContainerStartResponse, error) {
+func (ss *sobeyService) startNginx(info SobeyContainer) (*ContainerStartResponse, error) {
 
 	// 1.Get the sandbox info from etcd
 	sandboxInfoStr, err := ss.dbService.Get(util.BuildSandboxID(info.Labels[common.SandboxIDLabelKey]))
@@ -298,9 +303,59 @@ func (ss *sobeyService) startServer(info SobeyContainer) (*ContainerStartRespons
 	}
 
 	// 2.Open an output file for command stdout
-	myOut, err := os.OpenFile("myOut.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	//myOut, err := os.OpenFile("myOut.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	//if err != nil {
+	//	fmt.Printf("打开日志文件错误：%s", err)
+	//	return nil, err
+	//}
+
+	// 3.Set the net namespace
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	origns, _ := netns.Get()
+	defer origns.Close()
+
+	sandboxns, _ := netns.GetFromPath(fmt.Sprintf("/proc/%v/ns/net", sandboxInfo.Pid))
+	defer sandboxns.Close()
+
+	err = netns.Set(sandboxns)
 	if err != nil {
-		fmt.Printf("打开日志文件错误：%s", err)
+		return nil, err
+	}
+
+	// 4.Start the server
+	var pid string
+	pid, err = util.Exec("sh", []string{common.NginxShellPath}, &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUTS |
+			syscall.CLONE_NEWIPC |
+			syscall.CLONE_NEWPID |
+			syscall.CLONE_NEWUSER,
+	}, "", "", "")
+
+	// 5.Switch to original net namespace
+	err = netns.Set(origns)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ContainerStartResponse{
+		Name:   info.Name,
+		Pid:    pid,
+		Port:   0,
+		UpTime: time.Now().UnixNano(),
+	}, err
+}
+
+func (ss *sobeyService) startServer(info SobeyContainer) (*ContainerStartResponse, error) {
+	// 1.Get the sandbox info from etcd
+	sandboxInfoStr, err := ss.dbService.Get(util.BuildSandboxID(info.Labels[common.SandboxIDLabelKey]))
+	if err != nil {
+		return nil, err
+	}
+	sandboxInfo := new(SobeySandbox)
+	err = json.Unmarshal([]byte(sandboxInfoStr), &sandboxInfo)
+	if err != nil {
 		return nil, err
 	}
 
@@ -320,34 +375,17 @@ func (ss *sobeyService) startServer(info SobeyContainer) (*ContainerStartRespons
 	}
 
 	// 4.Start the server
-	args := []string{
-		"-jar",
-		"/root/secret-demo-0.0.1-SNAPSHOT.jar",
-	}
-	command := exec.Command("java", args...)
-	command.SysProcAttr = &syscall.SysProcAttr{
+	var pid string
+	pid, err = util.Exec("sh", []string{common.SecretShellPath}, &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUTS |
 			syscall.CLONE_NEWIPC |
 			syscall.CLONE_NEWPID |
 			syscall.CLONE_NEWNS,
-	}
-	command.Stdin = os.Stdin
-	command.Stdout = myOut
-	command.Stderr = os.Stderr
-	if err = command.Start(); err != nil {
-		log.Fatalln(err)
-		return nil, err
-	}
-
-	// 5.Switch to original net namespace
-	err = netns.Set(origns)
-	if err != nil {
-		return nil, err
-	}
+	}, "", "", "")
 
 	return &ContainerStartResponse{
 		Name:   info.Name,
-		Pid:    strconv.Itoa(command.Process.Pid),
+		Pid:    pid,
 		Port:   0,
 		UpTime: time.Now().UnixNano(),
 	}, err

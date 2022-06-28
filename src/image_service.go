@@ -35,9 +35,11 @@ func (ss *sobeyService) PullImage(ctx context.Context, req *runtimeapi.PullImage
 	}
 	return &runtimeapi.PullImageResponse{ImageRef: req.Image.Image}, nil
 }
+
 func (ss *sobeyService) RemoveImage(ctx context.Context, req *runtimeapi.RemoveImageRequest) (*runtimeapi.RemoveImageResponse, error) {
 	return &runtimeapi.RemoveImageResponse{}, nil
 }
+
 func (ss *sobeyService) ImageFsInfo(ctx context.Context, req *runtimeapi.ImageFsInfoRequest) (*runtimeapi.ImageFsInfoResponse, error) {
 	bytes, inodes, err := dirSize(common.ServerImageDirPath)
 	if err != nil {

@@ -22,4 +22,8 @@ const (
 
 	SandboxIDPrefix   = "sandbox"
 	ContainerIDPrefix = "container"
+
+	PauseShellPath  = "/root/pause.sh"
+	SecretShellPath = "/root/secret.sh"
+	NginxShellPath  = "/root/nginx.sh"
 )
