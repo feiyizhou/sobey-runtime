@@ -23,6 +23,7 @@ type Server struct {
 	Apis    ServerApi `json:"apis" mapstructure:"apis"`
 	IpRange string    `json:"ipRange" mapstructure:"ipRange"`
 	Repo    string    `json:"repo" mapstructure:"repo"`
+	Polling []int     `json:"polling" mapstructure:"polling"`
 }
 
 type ServerApi struct {

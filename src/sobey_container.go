@@ -4,20 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/vishvananda/netns"
+	"github.com/mitchellh/go-ps"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"io/ioutil"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
 	"k8s.io/klog/v2"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sobey-runtime/common"
+	"sobey-runtime/module"
 	util "sobey-runtime/utils"
+	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -25,15 +26,12 @@ type SobeyContainer struct {
 	ID               string                       `json:"id"`
 	Name             string                       `json:"name"`
 	Hostname         string                       `json:"hostname"`
-	ServerName       string                       `json:"serverName"`
-	ServerHost       string                       `json:"serverHost"`
-	ServerPort       int                          `json:"serverPort"`
-	Repo             string                       `json:"repo"`
 	Image            string                       `json:"image"`
 	Pid              string                       `json:"pid"`
 	Path             string                       `json:"path"`
 	PortMapping      []*runtimeapi.PortMapping    `json:"port"`
 	PodSandboxConfig *runtimeapi.PodSandboxConfig `json:"podSandboxConfig"`
+	ContainerConfig  *runtimeapi.ContainerConfig  `json:"containerConfig"`
 	State            runtimeapi.ContainerState    `json:"state"`
 	Uid              string                       `json:"uid"`
 	ApiVersion       string                       `json:"apiVersion"`
@@ -43,23 +41,12 @@ type SobeyContainer struct {
 	FinishedAt       int64                        `json:"finishedAt"`
 }
 
-type ContainerStartRequest struct {
-	Name   string `json:"name"`
-	Image  string `json:"image"`
-	LogDir string `json:"log_dir"`
-}
-
-type ContainerStartResponse struct {
+type ContainerStartResult struct {
 	Name         string `json:"name"`
 	Pid          string `json:"pid"`
 	Port         int    `json:"port"`
 	UpTime       int64  `json:"up_time"`
 	FinishedTime int64  `json:"finished_time"`
-}
-
-type ContainerStopRequest struct {
-	Name string `json:"name"`
-	Pid  string `json:"pid"`
 }
 
 func (ss *sobeyService) ListContainers(ctx context.Context, req *runtimeapi.ListContainersRequest) (*runtimeapi.ListContainersResponse, error) {
@@ -209,10 +196,10 @@ func (ss *sobeyService) CreateContainer(ctx context.Context, req *runtimeapi.Cre
 		ID:               containerID,
 		Name:             containerName,
 		Hostname:         hostname,
-		Repo:             ss.repo,
 		Image:            image,
 		PortMapping:      sandboxConfig.PortMappings,
 		PodSandboxConfig: sandboxConfig,
+		ContainerConfig:  config,
 		State:            runtimeapi.ContainerState_CONTAINER_CREATED,
 		Uid:              sandboxConfig.Metadata.Uid,
 		ApiVersion:       apiVersion,
@@ -249,19 +236,10 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 		return &runtimeapi.StartContainerResponse{}, nil
 	}
 	// Start a server
-	// TODO only for show, check the image is nginx, then start nginx process
-	var startRes *ContainerStartResponse
-	if strings.Contains(containerInfo.Image, "nginx") {
-		startRes, err = ss.startNginx(containerInfo)
-	} else {
-		startRes, err = ss.startServer(containerInfo)
-	}
+	startRes, err := ss.startServer(containerInfo)
 	if err != nil {
 		return nil, err
 	}
-	containerInfo.ServerName = startRes.Name
-	containerInfo.ServerHost = ss.host
-	containerInfo.ServerPort = startRes.Port
 	containerInfo.Pid = startRes.Pid
 	containerInfo.StartedAt = startRes.UpTime
 	containerInfo.FinishedAt = startRes.UpTime + 1000
@@ -289,8 +267,7 @@ func (ss *sobeyService) StartContainer(ctx context.Context, req *runtimeapi.Star
 	return &runtimeapi.StartContainerResponse{}, nil
 }
 
-func (ss *sobeyService) startNginx(info SobeyContainer) (*ContainerStartResponse, error) {
-
+func (ss *sobeyService) startServer(info SobeyContainer) (*ContainerStartResult, error) {
 	// 1.Get the sandbox info from etcd
 	sandboxInfoStr, err := ss.dbService.Get(util.BuildSandboxID(info.Labels[common.SandboxIDLabelKey]))
 	if err != nil {
@@ -301,94 +278,107 @@ func (ss *sobeyService) startNginx(info SobeyContainer) (*ContainerStartResponse
 	if err != nil {
 		return nil, err
 	}
-
-	// 2.Open an output file for command stdout
-	//myOut, err := os.OpenFile("myOut.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
-	//if err != nil {
-	//	fmt.Printf("打开日志文件错误：%s", err)
-	//	return nil, err
-	//}
-
-	// 3.Set the net namespace
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	origns, _ := netns.Get()
-	defer origns.Close()
-
-	sandboxns, _ := netns.GetFromPath(fmt.Sprintf("/proc/%v/ns/net", sandboxInfo.Pid))
-	defer sandboxns.Close()
-
-	err = netns.Set(sandboxns)
+	criParam := make(map[string]string)
+	err = json.Unmarshal([]byte(info.PodSandboxConfig.Annotations["sobey.com/cri-param"]), &criParam)
 	if err != nil {
 		return nil, err
 	}
-
-	// 4.Start the server
-	var pid string
-	pid, err = util.Exec("sh", []string{common.NginxShellPath}, &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS |
-			syscall.CLONE_NEWIPC |
-			syscall.CLONE_NEWPID |
-			syscall.CLONE_NEWUSER,
-	}, "", "", "")
-
-	// 5.Switch to original net namespace
-	err = netns.Set(origns)
-	if err != nil {
-		return nil, err
+	var ppid string
+	switch criParam["appType"] {
+	case "jar":
+		err = writeConfFile(info, criParam["imageName"], criParam["imageTag"],
+			sandboxInfo.Pid)
+		if err != nil {
+			return nil, err
+		}
+		sockerArgs := []string{
+			"run",
+			info.ID,
+		}
+		command := exec.Command("socker", sockerArgs...)
+		command.Stdin = os.Stdin
+		command.Stdout = os.Stdout
+		command.Stderr = os.Stderr
+		err = command.Start()
+		if err != nil {
+			return nil, err
+		}
+		ppid, err = getPPid(info.ID, ss.polling)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("invalid application type : %s ", criParam["appType"])
 	}
-
-	return &ContainerStartResponse{
+	return &ContainerStartResult{
 		Name:   info.Name,
-		Pid:    pid,
+		Pid:    ppid,
 		Port:   0,
 		UpTime: time.Now().UnixNano(),
 	}, err
 }
 
-func (ss *sobeyService) startServer(info SobeyContainer) (*ContainerStartResponse, error) {
-	// 1.Get the sandbox info from etcd
-	sandboxInfoStr, err := ss.dbService.Get(util.BuildSandboxID(info.Labels[common.SandboxIDLabelKey]))
-	if err != nil {
-		return nil, err
+func getPPid(id string, polling []int) (string, error) {
+	pidFileName := fmt.Sprintf(common.SockerContainerPidHome, id)
+	for _, space := range polling {
+		time.Sleep(time.Duration(space) * time.Second)
+		_, err := os.Stat(pidFileName)
+		if err != nil {
+			if err == os.ErrNotExist {
+				continue
+			}
+		} else {
+			bytes, err := ioutil.ReadFile(pidFileName)
+			if err != nil {
+				return "", err
+			}
+			return string(bytes), err
+		}
 	}
-	sandboxInfo := new(SobeySandbox)
-	err = json.Unmarshal([]byte(sandboxInfoStr), &sandboxInfo)
-	if err != nil {
-		return nil, err
+	return "", fmt.Errorf("Get container ppid over time ")
+}
+
+func writeConfFile(info SobeyContainer, imageName, imageTag,
+	sandboxPid string) error {
+	conf := new(module.ContainerConf)
+	conf.ID = info.ID
+	conf.SandboxPid = sandboxPid
+	conf.Mem = info.ContainerConfig.Linux.Resources.MemoryLimitInBytes
+	conf.Swap = info.ContainerConfig.Linux.Resources.MemorySwapLimitInBytes
+	conf.PIDs = 100
+	conf.CPUs = 20
+	conf.Image = module.Image{
+		Name: imageName,
+		Tag:  imageTag,
 	}
-
-	// 3.Set the net namespace
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	origns, _ := netns.Get()
-	defer origns.Close()
-
-	sandboxns, _ := netns.GetFromPath(fmt.Sprintf("/proc/%v/ns/net", sandboxInfo.Pid))
-	defer sandboxns.Close()
-
-	err = netns.Set(sandboxns)
-	if err != nil {
-		return nil, err
+	conf.Args = info.ContainerConfig.Args
+	var envArr []module.KeyValue
+	for _, envInfo := range info.ContainerConfig.Envs {
+		envArr = append(envArr, module.KeyValue{
+			Key:   envInfo.Key,
+			Value: envInfo.Value,
+		})
 	}
-
-	// 4.Start the server
-	var pid string
-	pid, err = util.Exec("sh", []string{common.SecretShellPath}, &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS |
-			syscall.CLONE_NEWIPC |
-			syscall.CLONE_NEWPID |
-			syscall.CLONE_NEWNS,
-	}, "", "", "")
-
-	return &ContainerStartResponse{
-		Name:   info.Name,
-		Pid:    pid,
-		Port:   0,
-		UpTime: time.Now().UnixNano(),
-	}, err
+	conf.Env = envArr
+	var mountArr []module.Mount
+	for _, mountInfo := range info.ContainerConfig.Mounts {
+		mountArr = append(mountArr, module.Mount{
+			ContainerPath: mountInfo.ContainerPath,
+			HostPath:      mountInfo.HostPath,
+		})
+	}
+	conf.Mount = mountArr
+	confPath := fmt.Sprintf(common.SockerContainerConfHome, info.ID)
+	err := util.CreateDirsIfDontExist([]string{confPath})
+	if err != nil {
+		return err
+	}
+	confFilePath := fmt.Sprintf("%s/config.json", confPath)
+	bytes, err := json.Marshal(conf)
+	if err != nil {
+		return err
+	}
+	return ioutil.WriteFile(confFilePath, bytes, 0777)
 }
 
 func (ss *sobeyService) StopContainer(ctx context.Context, req *runtimeapi.StopContainerRequest) (*runtimeapi.StopContainerResponse, error) {
@@ -405,7 +395,7 @@ func (ss *sobeyService) StopContainer(ctx context.Context, req *runtimeapi.StopC
 	if err != nil {
 		return nil, err
 	}
-	err = stopServer(containerInfo, ss.stopServerApiUrl)
+	err = stopServer(containerInfo.Pid)
 	if err != nil {
 		return nil, err
 	}
@@ -421,34 +411,37 @@ func (ss *sobeyService) StopContainer(ctx context.Context, req *runtimeapi.StopC
 	return &runtimeapi.StopContainerResponse{}, nil
 }
 
-func stopServer(info SobeyContainer, url string) error {
-	myOut, err := os.OpenFile("myOut.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+func stopServer(pidStr string) error {
+	list, err := ps.Processes()
 	if err != nil {
-		fmt.Printf("打开日志文件错误：%s", err)
 		return err
 	}
-	args := []string{
-		"-9",
-		info.Pid,
-	}
-	command := exec.Command("kill", args...)
-
-	//req := ContainerStopRequest{
-	//	Name: info.ServerName,
-	//	Pid:  info.Pid,
-	//}
-	//reqBytes, err := json.Marshal(req)
-	//if err != nil {
-	//	return err
-	//}
-	//_, err = util.HttpPost(url, string(reqBytes))
-	//return err
-	command.Stdin = os.Stdin
-	command.Stdout = myOut
-	command.Stderr = os.Stderr
-	if err = command.Start(); err != nil {
-		log.Fatalln(err)
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
 		return err
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	err = process.Kill()
+	if err != nil {
+		return err
+	}
+	_, _ = process.Wait()
+	for _, p := range list {
+		if p.Pid() == pid {
+			parentProcPID := p.PPid()
+			ppProcess, err := os.FindProcess(parentProcPID)
+			if err != nil {
+				return err
+			}
+			err = ppProcess.Kill()
+			if err != nil {
+				return err
+			}
+			_, _ = ppProcess.Wait()
+		}
 	}
 	return err
 }
@@ -478,7 +471,60 @@ func (ss *sobeyService) RemoveContainer(ctx context.Context, req *runtimeapi.Rem
 	if err != nil {
 		return nil, err
 	}
+	removeFS(containerInfo)
 	return &runtimeapi.RemoveContainerResponse{}, nil
+}
+
+func removeFS(info SobeyContainer) {
+	mntPath := fmt.Sprintf(common.SockerContainerFSHome, info.ID) + "/mnt"
+	for _, mountInfo := range info.ContainerConfig.Mounts {
+		if !strings.Contains(mountInfo.ContainerPath, "sobey") {
+			continue
+		}
+		target := fmt.Sprintf("%s%s", mntPath, mountInfo.ContainerPath)
+		err := unix.Unmount(target, 0)
+		if err != nil {
+			fmt.Printf("Unmount config file err, err : %v", err)
+		}
+	}
+	err := mountOverlayFS(info.ID)
+	if err != nil {
+		fmt.Printf("Unmount overlay file err, err : %v", err)
+	}
+	err = os.RemoveAll(fmt.Sprintf(common.SockerContainerHome, info.ID))
+	if err != nil {
+		fmt.Printf("remove all file err, err : %v", err)
+	}
+}
+
+func mountOverlayFS(id string) error {
+	mntPath := fmt.Sprintf(common.SockerContainerFSHome, id) + "/mnt"
+	err := unix.Unmount(fmt.Sprintf("%s/dev/pts",
+		mntPath), 0)
+	if err != nil {
+		return err
+	}
+	err = unix.Unmount(fmt.Sprintf("%s/dev", mntPath), 0)
+	if err != nil {
+		return err
+	}
+	err = unix.Unmount(fmt.Sprintf("%s/sys", mntPath), 0)
+	if err != nil {
+		return err
+	}
+	err = unix.Unmount(fmt.Sprintf("%s/proc", mntPath), 0)
+	if err != nil {
+		return err
+	}
+	err = unix.Unmount(fmt.Sprintf("%s/tmp", mntPath), 0)
+	if err != nil {
+		return err
+	}
+	err = unix.Unmount(mntPath, 0)
+	if err != nil {
+		return err
+	}
+	return err
 }
 
 func (ss *sobeyService) ContainerStatus(ctx context.Context, req *runtimeapi.ContainerStatusRequest) (*runtimeapi.ContainerStatusResponse, error) {

@@ -87,6 +87,7 @@ type sobeyService struct {
 	stopServerApiUrl string
 	healthyApiUrl    string
 	listServerApiUrl string
+	polling          []int
 }
 
 func NewSobeyService(serverConf *config.Server, pluginSettings *dockershim.NetworkPluginSettings) (SobeyService, error) {
@@ -112,6 +113,7 @@ func NewSobeyService(serverConf *config.Server, pluginSettings *dockershim.Netwo
 		stopServerApiUrl: fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.Stop),
 		healthyApiUrl:    fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.Healthy),
 		listServerApiUrl: fmt.Sprintf("%s%s", serverConf.Host, serverConf.Apis.List),
+		polling:          serverConf.Polling,
 	}
 	// Determine the hairpin mode.
 	if err := effectiveHairpinMode(pluginSettings); err != nil {

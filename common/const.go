@@ -17,13 +17,17 @@ const (
 	KubernetesContainerNameLabel = "io.kubernetes.container.name"
 
 	ServerLogDirPath        = "/var/lib/sobey/servers/log/"
-	ServerImageDirPath      = "/var/lib/sobey/images/"
 	KubernetesPodLogDirPath = "/var/log/pods/"
 
 	SandboxIDPrefix   = "sandbox"
 	ContainerIDPrefix = "container"
 
-	PauseShellPath  = "/root/pause.sh"
-	SecretShellPath = "/root/secret.sh"
-	NginxShellPath  = "/root/nginx.sh"
+	SockerHomePath   = "/var/lib/socker"
+	SockerTempPath   = SockerHomePath + "/tmp"
+	SockerImagesPath = SockerHomePath + "/images"
+
+	SockerContainerHome     = "/var/run/socker/containers/%s"
+	SockerContainerFSHome   = "/var/run/socker/containers/%s/fs"
+	SockerContainerConfHome = "/var/run/socker/containers/%s/conf"
+	SockerContainerPidHome  = "/var/run/socker/containers/%s/pid"
 )

@@ -35,10 +35,10 @@ func init() {
 		}
 	}
 
-	_, err = os.Stat(filepath.Dir(common.ServerImageDirPath))
+	_, err = os.Stat(filepath.Dir(common.SockerImagesPath))
 	if err != nil {
 		if os.IsNotExist(err) {
-			err := os.MkdirAll(filepath.Dir(common.ServerImageDirPath), 0750)
+			err := os.MkdirAll(filepath.Dir(common.SockerImagesPath), 0750)
 			if err != nil {
 				fmt.Printf("Create kubernetes pod log dir err, err: %v", err)
 			}
@@ -57,6 +57,7 @@ func init() {
 }
 
 func main() {
+
 	err := config.InitConf()
 	if err != nil {
 		fmt.Printf("Init config err, err: %v", err)

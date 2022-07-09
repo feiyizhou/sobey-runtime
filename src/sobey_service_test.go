@@ -26,7 +26,7 @@ func TestSobeyService_InitIpRange(t *testing.T) {
 			List:    "/v1/server/list",
 		},
 		IpRange: "172.244.0.0/24",
-	})
+	}, nil)
 	_ = service.InitIpRange()
 }
 
@@ -49,7 +49,7 @@ func TestSobeyService_PutReleasedIP(t *testing.T) {
 			List:    "/v1/server/list",
 		},
 		IpRange: "172.244.0.0/24",
-	})
+	}, nil)
 	_ = service.PutReleasedIP("172.16.200.2")
 }
 
@@ -72,7 +72,7 @@ func TestSobeyService_NewSandboxIP(t *testing.T) {
 			List:    "/v1/server/list",
 		},
 		IpRange: "172.244.0.0/24",
-	})
+	}, nil)
 	ip, _ := service.NewSandboxIP()
 	fmt.Println(ip)
 }

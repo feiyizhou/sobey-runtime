@@ -2,13 +2,10 @@ package src
 
 import (
 	"context"
-	"fmt"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
 	"os"
 	"path/filepath"
 	"sobey-runtime/common"
-	util "sobey-runtime/utils"
-	"strings"
 	"time"
 )
 
@@ -22,17 +19,17 @@ func (ss *sobeyService) ImageStatus(ctx context.Context, req *runtimeapi.ImageSt
 }
 
 func (ss *sobeyService) PullImage(ctx context.Context, req *runtimeapi.PullImageRequest) (*runtimeapi.PullImageResponse, error) {
-	image := req.Image.Image
-	if strings.HasSuffix(image, ":latest") {
-		imageArr := strings.Split(image, ":")
-		image = strings.Join(imageArr[:len(imageArr)-1], ":")
-	}
-	srcPath := fmt.Sprintf("%s%s", ss.repo, image)
-	desPath := filepath.Join(common.ServerImageDirPath, image)
-	err := util.DownLoadFile(srcPath, desPath)
-	if err != nil {
-		fmt.Println(err)
-	}
+	//image := req.Image.Image
+	//if strings.HasSuffix(image, ":latest") {
+	//	imageArr := strings.Split(image, ":")
+	//	image = strings.Join(imageArr[:len(imageArr)-1], ":")
+	//}
+	//srcPath := fmt.Sprintf("%s%s", ss.repo, image)
+	//desPath := filepath.Join(common.SockerImagesPath, image)
+	//err := util.DownLoadFile(srcPath, desPath)
+	//if err != nil {
+	//	fmt.Println(err)
+	//}
 	return &runtimeapi.PullImageResponse{ImageRef: req.Image.Image}, nil
 }
 
@@ -41,7 +38,7 @@ func (ss *sobeyService) RemoveImage(ctx context.Context, req *runtimeapi.RemoveI
 }
 
 func (ss *sobeyService) ImageFsInfo(ctx context.Context, req *runtimeapi.ImageFsInfoRequest) (*runtimeapi.ImageFsInfoResponse, error) {
-	bytes, inodes, err := dirSize(common.ServerImageDirPath)
+	bytes, inodes, err := dirSize(common.SockerImagesPath)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +47,7 @@ func (ss *sobeyService) ImageFsInfo(ctx context.Context, req *runtimeapi.ImageFs
 			{
 				Timestamp: time.Now().Unix(),
 				FsId: &runtimeapi.FilesystemIdentifier{
-					Mountpoint: common.ServerImageDirPath,
+					Mountpoint: common.SockerImagesPath,
 				},
 				UsedBytes: &runtimeapi.UInt64Value{
 					Value: uint64(bytes),

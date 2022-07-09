@@ -10,12 +10,11 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/dockershim"
-	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sobey-runtime/common"
 	util "sobey-runtime/utils"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -83,10 +82,15 @@ func constructPodSandboxCheckpoint(config *runtimeapi.PodSandboxConfig) checkpoi
 
 func (ss *sobeyService) RunPodSandbox(ctx context.Context, req *runtimeapi.RunPodSandboxRequest) (*runtimeapi.RunPodSandboxResponse, error) {
 	config := req.GetConfig()
-	sandboxID := util.RandomString()
 
+	err := ValidateAnnotations(config.Annotations)
+	if err != nil {
+		return nil, err
+	}
+
+	sandboxID := util.RandomString()
 	// 1. Create Sandbox Checkpoint.
-	if err := ss.checkpointManager.CreateCheckpoint(sandboxID, constructPodSandboxCheckpoint(config)); err != nil {
+	if err = ss.checkpointManager.CreateCheckpoint(sandboxID, constructPodSandboxCheckpoint(config)); err != nil {
 		return nil, err
 	}
 
@@ -126,6 +130,27 @@ func (ss *sobeyService) RunPodSandbox(ctx context.Context, req *runtimeapi.RunPo
 	ss.setNetworkReady(sandboxID, true)
 	resp := &runtimeapi.RunPodSandboxResponse{PodSandboxId: sandboxID}
 	return resp, nil
+}
+
+func ValidateAnnotations(annotations map[string]string) error {
+	if annotations == nil || len(annotations["sobey.com/cri-param"]) == 0 {
+		return fmt.Errorf("Please identify the cri param info ")
+	}
+	var appParams map[string]string
+	err := json.Unmarshal([]byte(annotations["sobey.com/cri-param"]), &appParams)
+	if err != nil {
+		return fmt.Errorf("Parse application param error ")
+	}
+	if len(appParams["appType"]) == 0 {
+		return fmt.Errorf("Please identify the application type in annotations ")
+	}
+	if len(appParams["imageName"]) == 0 {
+		return fmt.Errorf("Please identify the application imageName in annotations ")
+	}
+	if len(appParams["imageTag"]) == 0 {
+		return fmt.Errorf("Please identify the application imageTag in annotations ")
+	}
+	return nil
 }
 
 func (ss *sobeyService) setupNet(id string, config *runtimeapi.PodSandboxConfig) (string, error) {
@@ -210,7 +235,7 @@ func runSandboxServer() (string, error) {
 		"pause",
 	}
 
-	return util.Exec("/bin/sh", args, &syscall.SysProcAttr{
+	return util.Exec("/bin/sh", args, nil, &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUTS |
 			syscall.CLONE_NEWIPC |
 			syscall.CLONE_NEWPID |
@@ -252,24 +277,19 @@ func (ss *sobeyService) StopPodSandbox(ctx context.Context, req *runtimeapi.Stop
 	}
 
 	// 3.Stop the process
-	args := []string{
-		"-9",
-		sandboxInfo.Pid,
-	}
-	command := exec.Command("kill", args...)
-	myOut, err := os.OpenFile("myOut.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
-	defer myOut.Close()
+	pid, err := strconv.Atoi(sandboxInfo.Pid)
 	if err != nil {
-		fmt.Printf("打开日志文件错误：%s", err)
 		return nil, err
 	}
-	command.Stdin = os.Stdin
-	command.Stdout = myOut
-	command.Stderr = os.Stderr
-	if err = command.Start(); err != nil {
-		log.Fatalln(err)
+	process, err := os.FindProcess(pid)
+	if err != nil {
 		return nil, err
 	}
+	err = process.Kill()
+	if err != nil {
+		return nil, err
+	}
+	_, _ = process.Wait()
 
 	// 4.Update the state of sandbox to notReady
 	sandboxInfo.State = runtimeapi.PodSandboxState_SANDBOX_NOTREADY

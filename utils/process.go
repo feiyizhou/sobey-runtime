@@ -8,8 +8,11 @@ import (
 	"syscall"
 )
 
-func Exec(name string, args []string, attr *syscall.SysProcAttr, inFile, outFile, errFile string) (string, error) {
+func Exec(name string, args, env []string, attr *syscall.SysProcAttr, inFile, outFile, errFile string) (string, error) {
 	command := exec.Command(name, args...)
+	if len(env) != 0 {
+		command.Env = env
+	}
 	if attr != nil {
 		command.SysProcAttr = attr
 	}
@@ -41,10 +44,6 @@ func Exec(name string, args []string, attr *syscall.SysProcAttr, inFile, outFile
 		command.Stderr = os.Stderr
 	}
 	err := command.Start()
-	if err != nil {
-		return "", err
-	}
-	err = command.Wait()
 	if err != nil {
 		return "", err
 	}

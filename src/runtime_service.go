@@ -5,7 +5,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
-	"sobey-runtime/common"
 	"time"
 )
 
@@ -111,7 +110,7 @@ func (ss *sobeyService) getContainerStats(c *runtimeapi.Container) (*runtimeapi.
 		},
 		WritableLayer: &runtimeapi.FilesystemUsage{
 			Timestamp: timestamp,
-			FsId:      &runtimeapi.FilesystemIdentifier{Mountpoint: common.ServerImageDirPath},
+			//FsId:      &runtimeapi.FilesystemIdentifier{Mountpoint: common.SockerImagesPath},
 			UsedBytes: &runtimeapi.UInt64Value{Value: 1},
 		},
 	}

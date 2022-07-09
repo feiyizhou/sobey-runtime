@@ -13,3 +13,4 @@ server:
     list: /v1/server/list
   ipRange: 172.244.0.0/24
   repo: http://172.16.200.116:8081/repository/appManager/
+  polling: [1,2,3,5,8,13,21,34,55,89,144]
