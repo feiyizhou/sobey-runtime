@@ -368,6 +368,30 @@ func writeConfFile(info SobeyContainer, imageName, imageTag,
 		})
 	}
 	conf.Mount = mountArr
+
+	linuxResource := info.ContainerConfig.Linux.Resources
+	if linuxResource != nil {
+		var hugePageLimits []module.HugepageLimit
+		for _, limit := range linuxResource.HugepageLimits {
+			hugePageLimits = append(hugePageLimits, module.HugepageLimit{
+				PageSize: limit.PageSize,
+				Limit:    limit.Limit,
+			})
+		}
+		conf.Resource = module.Resource{
+			CpuPeriod:              linuxResource.CpuPeriod,
+			CpuQuota:               linuxResource.CpuQuota,
+			CpuShares:              linuxResource.CpuShares,
+			MemoryLimitInBytes:     linuxResource.MemoryLimitInBytes,
+			OomScoreAdj:            linuxResource.OomScoreAdj,
+			CpusetCpus:             linuxResource.CpusetCpus,
+			CpusetMems:             linuxResource.CpusetMems,
+			HugepageLimits:         hugePageLimits,
+			Unified:                linuxResource.Unified,
+			MemorySwapLimitInBytes: linuxResource.MemorySwapLimitInBytes,
+		}
+	}
+
 	confPath := fmt.Sprintf(common.SockerContainerConfHome, info.ID)
 	err := util.CreateDirsIfDontExist([]string{confPath})
 	if err != nil {

@@ -11,6 +11,25 @@ type ContainerConf struct {
 	Args       []string   `json:"args"`
 	Env        []KeyValue `json:"env"`
 	Mount      []Mount    `json:"mount"`
+	Resource   Resource   `json:"resource"`
+}
+
+type Resource struct {
+	CpuPeriod              int64             `json:"cpuPeriod"`
+	CpuQuota               int64             `json:"cpuQuota"`
+	CpuShares              int64             `json:"cpuShares"`
+	MemoryLimitInBytes     int64             `json:"memoryLimitInBytes"`
+	OomScoreAdj            int64             `json:"oomScoreAdj"`
+	CpusetCpus             string            `json:"cpusetCpus"`
+	CpusetMems             string            `json:"cpusetMems"`
+	HugepageLimits         []HugepageLimit   `json:"hugepageLimits"`
+	Unified                map[string]string `json:"unified"`
+	MemorySwapLimitInBytes int64             `json:"memorySwapLimitInBytes"`
+}
+
+type HugepageLimit struct {
+	PageSize string `json:"pageSize,omitempty"`
+	Limit    uint64 `json:"limit,omitempty"`
 }
 
 type Image struct {
